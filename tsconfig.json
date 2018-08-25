@@ -1,0 +1,15 @@
+{
+    "compilerOptions": {
+        "allowSyntheticDefaultImports": true,
+        "esModuleInterop": true,
+        "experimentalDecorators": true,
+        "preserveConstEnums": true,
+
+        "target": "es6",
+        "module": "commonjs"
+    },
+
+    "typeAcquisition": {
+        "enable": true
+    }
+}
