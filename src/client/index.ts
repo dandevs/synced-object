@@ -1,83 +1,64 @@
 import _ from "lodash";
-import { DataCore } from "../core";
-import { ClientUpdateMeta } from "../interfaces";
+import { DataCore, $IIntercept } from "../core";
 import { action } from "mobx";
+import { fromEvent, merge, empty, Observable } from "rxjs";
+import { switchMap, finalize, take, filter } from "rxjs/operators";
 
-export class ClientData<T={}> {
-    private readonly client: SocketIOClient.Socket;
-    private readonly core: DataCore<T>;
+export class ClientData<T={}> extends DataCore<T> {
+    private isInterceptingFromServer = false;
+    private socket: SocketIOClient.Socket;
 
-    private changeMeta: ClientUpdateMeta = {
-        origin: "client",
-    };
+    private $interceptFromServer: Observable<$IIntercept>;
+    private $interceptFromSelf: Observable<$IIntercept>;
 
-    public get data() {
-        return this.core.data;
-    }
+    static async connect<T>(socket: SocketIOClient.Socket) {
+        if (!socket.connected)
+            await untilConnected();
 
-    public static async connect<T={}>(client: SocketIOClient.Socket) {
-        let data: T;
+        return new ClientData<T>(await retreiveData(), socket);
 
-        if (client.connected) {
-            data = await requestData();
-        }
-        else {
-            await getConnection();
-            data = await requestData();
-        }
-
-        return new ClientData(client, data);
-
-        //#region Utility
-        function getConnection() {
+        function untilConnected() {
             return new Promise((resolve) => {
-                client.once("connect", resolve);
+                socket.once("connect", resolve);
             });
         }
 
-        function requestData(): Promise<T> {
+        function retreiveData(): Promise<T> {
             return new Promise((resolve) => {
-                client.emit("request-data", (data: T) => {
-                    resolve(data);
-                });
+                socket.emit("get-data", (data) => resolve(data));
             });
         }
-        //#endregion
     }
 
-    private constructor(client: SocketIOClient.Socket, baseData: T) {
-        this.client = client;
+    constructor(baseData: T, socket: SocketIOClient.Socket) {
+        super(baseData);
+        this.socket = socket;
 
-        this.core = new DataCore<T>({
-            valueWillChange: (change, path) => {
-                if (this.changeMeta.origin === "server") {
-                    return change;
-                }
-                else {
-                    this.emitUpdate({
-                        [path]: change.newValue,
-                    });
-                }
+        this.$interceptFromServer = fromEvent(this.socket, "update").pipe(
+            switchMap(update => {
+                this.isInterceptingFromServer = true;
 
-                return change;
-            },
-        },
-        baseData);
+                return merge(
+                    this.$intercept.pipe(
+                        take(_.size(update)),
+                        finalize(() => this.isInterceptingFromServer = false),
+                    ),
+                    empty().pipe(finalize(() => this.updateData(update))),
+                );
+            }),
+        );
 
-        this.client.on("update", (update) => this.receiveUpdate(update));
-    }
+        this.$interceptFromSelf = this.$intercept.pipe(
+            filter(() => !this.isInterceptingFromServer),
+        );
 
-    private emitUpdate(update: {}) {
-        this.client.emit("update", update);
-    }
-
-    @action private receiveUpdate(update: {}) {
-        this.changeMeta.origin = "server";
-
-        _.forEach(update, (value, path) => {
-            _.set(this.data as {}, path, value);
+        this.$interceptFromServer.subscribe(e => {
+            e.acceptChange();
         });
 
-        this.changeMeta.origin = "client";
+        this.$interceptFromSelf.subscribe(e => {
+            this.socket.emit("update", { [e.path]: e.change.newValue});
+            e.acceptChange();
+        });
     }
 }

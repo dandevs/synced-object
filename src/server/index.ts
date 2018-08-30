@@ -1,55 +1,64 @@
 import _ from "lodash";
 import { toJS, action } from "mobx";
 import { DataCore } from "../core";
-import { DataUpdate } from "../interfaces";
+import { Subject, merge, empty, of, zip, combineLatest } from "rxjs";
+import { switchMap, finalize, map, share, windowToggle, mergeAll, take, filter } from "rxjs/operators";
 
-export class ServerData<T> {
-    private readonly core: DataCore<T>;
-    public readonly socketServer: SocketIO.Server;
+export class ServerData<T={}> extends DataCore<T> {
+    private socketServer: SocketIO.Server;
+    private isInterceptingFromSocket = false;
 
-    public get data() {
-        return this.core.data;
-    }
+    private $receiveDataUpdate = new Subject<$UpdateStreamInfo>();
+
+    private $interceptFromSocket = this.$receiveDataUpdate.pipe(
+        switchMap(sender => {
+            this.isInterceptingFromSocket = true;
+
+            return merge(
+                this.$intercept.pipe(
+                    take(_.size(sender.update)),
+                    map(intercept => ({ intercept, sender })),
+                    finalize(() => this.isInterceptingFromSocket = false),
+                ),
+                empty().pipe(finalize(() => this.updateData(sender.update))),
+            );
+        }),
+        share(),
+    );
+
+    private $interceptFromSelf = this.$intercept.pipe(
+        filter(() => !this.isInterceptingFromSocket),
+    );
 
     constructor(socketServer: SocketIO.Server, baseData?: T) {
+        super(baseData);
         this.socketServer = socketServer;
-        this.core = new DataCore({
-            valueWillChange: (change, path) => {
-                return change;
-            },
-
-            valueDidChange: (change, path) => {
-                this.socketServer;
-
-                _.forEach(this.socketServer.clients().sockets, (socket, id) => {
-                    socket.emit("update", {[path]: change.newValue});
-                });
-            },
-        }, baseData);
-
-        this.socketServer.on("update", (socket: SocketIO.Socket) => {
-            console.log(socket);
-        });
 
         this.socketServer.on("connection", (socket) => {
-            this.attachSocketEvents(socket);
-        });
-    }
+            socket.on("update", (updateData: {}) => {
+                this.$receiveDataUpdate.next({
+                    socket: socket,
+                    update: updateData,
+                });
+            });
 
-    @action private receiveUpdate(socket: SocketIO.Socket, update: {}) {
-        _.forEach(update, (value, path) => {
-            _.set(this.data as any, path, value);
-        });
-    }
-
-    private attachSocketEvents(socket: SocketIO.Socket) {
-        socket.on("request-data", (returnData: (data: T) => void) => {
-            returnData(toJS(this.data));
+            socket.on("get-data", (send: (data: T) => void) => {
+                send(toJS(this.data));
+            });
         });
 
-        socket.on("update", (update: {}) => {
-            this.receiveUpdate(socket, update);
+        this.$interceptFromSocket.subscribe(e => {
+            e.intercept.acceptChange();
+            e.sender.socket.broadcast.emit("update", e.sender.update);
+        });
+
+        this.$interceptFromSelf.subscribe(e => {
+            e.acceptChange();
         });
     }
 }
 
+type $UpdateStreamInfo = {
+    socket: SocketIO.Socket,
+    update: {},
+};

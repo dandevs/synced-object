@@ -1,56 +1,64 @@
 import _ from "lodash";
+import { Observable, Subject } from "rxjs";
 import { observable, intercept, observe, IValueWillChange, IValueDidChange, action } from "mobx";
 
 // TODO: Append new children to tree
 export class DataCore<T=object> {
-    @observable readonly data: T;
-    @observable readonly tree: object;
+    @observable public data: T;
+    @observable private tree: {};
 
-    private readonly interceptDisposers: Set<()=>void> = new Set();
-    private readonly observeDisposers: Set<()=>void> = new Set();
-    private readonly events: DataEvents;
+    $intercept: Observable<$IIntercept>;
+    $observe: Observable<IValueDidChangeWithPath>;
 
-    constructor(events: DataEvents, baseData?: T) {
-        this.data = _.defaultsDeep(this.data, _.cloneDeep(baseData || {}));
+    constructor(baseData: T) {
+        this.data = _.cloneDeep(baseData) || {} as T;
         this.tree = getPaths(this.data);
-        this.events = events;
+        this.initStreams();
+    }
 
-        // TODO: Refactor this to be able to add new children
-        _.forEach(this.tree, (obj, path) => {
-            const i_disposer = intercept(obj, (change) => {
-                return (this.events.valueWillChange || (() => change))(change, joinPath(path, (change as any).name));
+    private initStreams() {
+        const $interceptSubject = new Subject<$IIntercept>();
+        const $observeSubject   = new Subject<IValueDidChangeWithPath>();
+
+        _.forEach(this.tree, (value, path) => {
+            intercept(value, (change) => {
+                let accepted = false;
+                const acceptChange = () => accepted = true;
+
+                $interceptSubject.next({
+                    change, path: joinPath(path, (change as any).name), acceptChange,
+                });
+
+                return accepted ? change : null;
             });
 
-            const o_disposer = observe(obj, (change) => {
-                (this.events.valueDidChange || _.noop)(change, joinPath(path, (change as any).name));
+            observe(value, (change: IValueDidChangeWithPath) => {
+                change.path = joinPath(path, change.name);
+                $observeSubject.next(change);
             });
-
-            this.interceptDisposers.add(i_disposer);
-            this.observeDisposers.add(o_disposer);
         });
+
+        this.$intercept = $interceptSubject.pipe();
+        this.$observe   = $observeSubject.pipe();
     }
 
-    public dispose() {
-        this.interceptDisposers.forEach((disposer) => disposer());
-        this.observeDisposers.forEach((disposer) => disposer());
-
-        this.interceptDisposers.clear();
-        this.observeDisposers.clear();
-    }
-
-    @action public setData(newData: T) {
-        this.dispose();
-
-        _.forEach(this.data as {}, (value, key) => {
-            delete this.data[key];
+    @action.bound protected updateData(update: {}) {
+        _.forEach(update, (value, path) => {
+            _.set(this.data as {}, path, value);
         });
     }
 }
 
-export interface DataEvents {
-    valueWillChange?: (change: IValueWillChange<{}>, path: string) => IValueWillChange<{}>|null;
-    valueDidChange?: (change: IValueDidChange<{}>, path: string) => void;
-}
+export type $IIntercept = {
+    acceptChange: () => void;
+    change:       IValueWillChange<{}>,
+    path:         string;
+};
+
+export type IValueDidChangeWithPath = IValueDidChange<{}> & {
+    path: string;
+    name: string;
+};
 
 // ---------------------------------------------------------------------------
 // Utils
