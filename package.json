@@ -1,7 +1,7 @@
 {
     "dependencies": {
-        "inversify": "^4.13.0",
         "lodash": "^4.17.10",
+        "rxjs": "^6.2.2",
         "shortid": "^2.2.13",
         "socket.io": "^2.1.1",
         "socket.io-client": "^2.1.1"
@@ -19,7 +19,7 @@
         "then-sleep": "^1.0.1"
     },
     "peerDependencies": {
-        "mobx": "^5.0.4"
+        "mobx": "^5.0.5"
     },
     "jest": {
         "testEnvironment": "node"
