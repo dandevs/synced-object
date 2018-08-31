@@ -19,7 +19,7 @@
         "then-sleep": "^1.0.1"
     },
     "peerDependencies": {
-        "mobx": "^5.0.5"
+        "mobx": "^5.1.0"
     },
     "jest": {
         "testEnvironment": "node"
