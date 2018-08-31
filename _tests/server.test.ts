@@ -1,4 +1,3 @@
-import "reflect-metadata";
 import ServerIO from "socket.io";
 import ClientIO from "socket.io-client";
 import getPort from "get-port";
